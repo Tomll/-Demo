@@ -17,11 +17,13 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.support.annotation.NonNull;
+import android.support.v4.app.NotificationManagerCompat;
 import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -45,7 +47,6 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Timer;
-import java.util.TimerTask;
 
 import pub.devrel.easypermissions.EasyPermissions;
 
@@ -57,11 +58,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     TextView tvAddress;
     MapView mapView;
     BaiduMap mBaiduMap;
-    Timer timerTrace;//定时请求轨迹数据的计时器
-
-//    LocationClient mLocationClient;//定位客户端
-//    Trace mTrace;//轨迹服务
-//    LBSTraceClient mTraceClient;//轨迹服务客户端
+    Timer timerTrace;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,6 +69,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         requestIgnoringBatteryOptimization();
         //申请运行时权限
         requestRuntimePermission();
+        //检测通知权限
+        checkNotifyPermission();
     }
 
     /**
@@ -162,7 +161,6 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         Log.d(TAG, "onResume");
         if (isGPSAndNetworkOK(MainActivity.this)) {
             Log.d(TAG, "GPS  NET  IS OK");
-
         }
     }
 
@@ -238,7 +236,6 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                             if (null != timerTrace) {
                                 timerTrace.cancel();
                                 timerTrace = null;
-                                Log.d(TAG, "timerTrace 空空");
                             }
                             unbindService(MainActivity.this);
                             isOnBind = false;
@@ -249,6 +246,10 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         }
     }
 
+
+    int locationPointsSize;
+    int tracePointsSize;
+
     @Override
     public void onServiceConnected(ComponentName name, IBinder service) {
         final LocationTraceService locationTraceService = ((LocationTraceService.MyBinder) service).getLocationTraceService();
@@ -256,79 +257,72 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         locationTraceService.setMyLocationDataListener(new LocationTraceService.MyLocationDataListener() {
             @Override
             public void onLocationDataChange(BDLocation bdLocation, ArrayList<BDLocation> historyBDLocations) {
-                Log.d(TAG, "回调成功");
-                //定位绘制
-                if ((transportMode == 1 || transportMode == 2) && null != historyBDLocations && historyBDLocations.size() >= 2) {
-                    Log.d(TAG, "bdLocations.size():" + historyBDLocations.size());
-                    drawLocationPolyline(historyBDLocations);
+                if (null != historyBDLocations && historyBDLocations.size() != locationPointsSize) {//说明有新增数据，才进行绘制
+                    locationPointsSize = historyBDLocations.size();
+                    Log.d(TAG, "有新的定位数据");
+                    //通过定位点绘制折线
+                    if (historyBDLocations.size() >= 2) {
+                        Log.d(TAG, "bdLocations.size():" + historyBDLocations.size());
+                        //Toast.makeText(MainActivity.this, "bdLocations.size()：" + historyBDLocations.size(), Toast.LENGTH_SHORT).show();
+                        drawLocationPolyline(historyBDLocations);
+                    }
+                    //显示定位点
+                    String addrStr = bdLocation.getAddrStr();
+                    LatLng latLng = new LatLng(bdLocation.getLatitude(), bdLocation.getLongitude());
+                    tvAddress.setText("纬度：" + latLng.latitude + "\n经度：" + latLng.longitude + "\n时间：" + bdLocation.getTime() + "\n地址：" + addrStr + "\n描述：" + bdLocation.getLocationDescribe());
+                    //addLog(LocationTraceService.this, "定位信息：\n" + "纬度：" + latLng.latitude + "\n经度：" + latLng.longitude + "\n地址信息：" + addrStr);
+                    mBaiduMap.setMyLocationEnabled(true);// 开启定位图层
+                    //构造定位点数据
+                    MyLocationData locData = new MyLocationData.Builder()
+                            .latitude(latLng.latitude)
+                            .longitude(latLng.longitude)
+                            .direction(bdLocation.getDirection())// 此处设置开发者获取到的方向信息，顺时针0-360
+                            .accuracy(bdLocation.getRadius())// 获取定位精度
+                            .build();
+                    mBaiduMap.setMyLocationData(locData);// 设置定位数据
+                    if (historyBDLocations.size() == 1) {//只有第一个点设置地图中心
+                        mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newLatLngZoom(latLng, 18));
+                    }
                 }
-
-                //以下逻辑展示定位点
-                String addrStr = bdLocation.getAddrStr();
-                LatLng latLng = new LatLng(bdLocation.getLatitude(), bdLocation.getLongitude());
-                tvAddress.setText("纬度：" + latLng.latitude + "\n经度：" + latLng.longitude + "\n时间：" + bdLocation.getTime() + "\n地址：" + addrStr + "\n描述：" + bdLocation.getLocationDescribe());
-                //addLog(LocationTraceService.this, "定位信息：\n" + "纬度：" + latLng.latitude + "\n经度：" + latLng.longitude + "\n地址信息：" + addrStr);
-                mBaiduMap.setMyLocationEnabled(true);// 开启定位图层
-                // 构造定位数据
-                MyLocationData locData = new MyLocationData.Builder()
-                        .latitude(latLng.latitude)
-                        .longitude(latLng.longitude)
-                        .direction(bdLocation.getDirection())// 此处设置开发者获取到的方向信息，顺时针0-360
-                        .accuracy(bdLocation.getRadius())// 获取定位精度
-                        .build();
-                mBaiduMap.setMyLocationData(locData);// 设置定位数据
-                mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newLatLng(latLng));
             }
         });
-/*        //定时请求定位数据
-        timerLocation = new Timer();
-        timerLocation.schedule(new TimerTask() {
-            @Override
-            public void run() {
-                ArrayList<BDLocation> bdLocations = locationTraceService.requestBDLocations();
-                if (null != bdLocations && bdLocations.size() > 0) {
-                    Log.d(TAG, "bdLocations.size():" + bdLocations.size());
-                    drawLocationPolyline(bdLocations);
-                }
-            }
-        }, 1 * 1000, 10 * 1000);*/
         //如果是驾车模式，定时请求轨迹数据
-        if (transportMode == 0) {
+/*        if (transportMode == 0) {
             timerTrace = new Timer();
             timerTrace.schedule(new TimerTask() {
                 @Override
                 public void run() {
-                    ArrayList<LatLng> latLngs = locationTraceService.requestTrack(0);
+                    ArrayList<LatLng> latLngs = locationTraceService.requestTrack(transportMode);
                     Log.d(TAG, "请求的鹰眼数据点个数：" + latLngs.size());
-                    if (null != latLngs && latLngs.size() >= 2) {//需要两个以上定位点，才能绘制折线
-                        drawTracePolyline(latLngs);
+                    if (null != latLngs && latLngs.size() != tracePointsSize) {
+                        tracePointsSize = latLngs.size();
+                        if (latLngs.size() >= 2) {//需要两个以上定位点，才能绘制折线
+                            drawTracePolyline(latLngs);
+                        }
+                    }else {
+                        Log.d(TAG, "没有新的轨迹数据");
                     }
                 }
             }, 1 * 1000, 10 * 1000);
-        }
+        }*/
+
     }
 
     @Override
     public void onServiceDisconnected(ComponentName name) {
         Log.d(TAG, "onServiceDisconnected");
-/*        if (null != timerTrace) {
-            timerTrace.cancel();
-            timerTrace = null;
-            Log.d(TAG, "timerTrace 制空");
-
-        }*/
     }
 
 
     //鹰眼轨迹绘制折线
     public void drawTracePolyline(ArrayList<LatLng> points) {
         mBaiduMap.clear();//先清空地图
-        //绘制折线,注意需要两个以上的点才能绘制，所以我们在前面做了判断
+        //绘制折线,注意需要两个以上的点才能绘制，所以我们在调用前做了判断
         OverlayOptions ooPolyline = new PolylineOptions().width(10).color(0xAAFF0000).points(points);
         mBaiduMap.addOverlay(ooPolyline);
         //绘制起点
         //BitmapDescriptor startBitmap = BitmapDescriptorFactory.fromResource(R.drawable.start_point);
-        //mBaiduMap.addOverlay(new MarkerOptions().position(points.get(0)).icon(startBitmap));
+        //mBaiduMap.addOverlay(new MarkerOptions().position(points.get(0)).ic_launcher(startBitmap));
         Log.d(TAG, "draw_by_trace");
     }
 
@@ -341,13 +335,13 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             locationPoints.add(latLng);
         }
         mBaiduMap.clear();//先清空地图
-        //绘制轨迹折线,注意需要两个以上的点才能绘制，所以我们在前面做了判断
+        //绘制轨迹折线,注意需要两个以上的点才能绘制，所以我们在调用前做了判断
         OverlayOptions ooPolyline = new PolylineOptions().width(10).color(0xAA0000FF).points(locationPoints);
         mBaiduMap.addOverlay(ooPolyline);
         //绘制起点
         //BitmapDescriptor startBitmap = BitmapDescriptorFactory.fromResource(R.drawable.start_point);
         //LatLng latLng1 = new LatLng(bdLocations.get(0).getLatitude(), bdLocations.get(0).getLongitude());
-        //mBaiduMap.addOverlay(new MarkerOptions().position(latLng1).icon(startBitmap));
+        //mBaiduMap.addOverlay(new MarkerOptions().position(latLng1).ic_launcher(startBitmap));
         Log.d(TAG, "draw_by_location");
 
     }
@@ -487,18 +481,6 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             e.printStackTrace();
         }
 
-
-
-
-/*        FileOutputStream fos = null;
-        try {
-            fos = context.openFileOutput("zbsyslog.txt", Context.MODE_APPEND);
-            fos.write(content.getBytes());
-            fos.close();
-        } catch (Exception e) {
-        }
-        fos = null;
-        return;*/
     }
 
     //判断当前环境是否是Wifi
@@ -510,6 +492,82 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         } else {
             return false;
         }
+    }
+
+    //检测是否有通知权限并弹出对应提示框
+    public void checkNotifyPermission() {
+        Log.d("ServiceManger", "检测权限--------------");
+        if (!isNotificationEnabled()) {
+            Log.d("ServiceManger", "没有通知权限");
+            showNotifyPermissionAlertDialog();
+        }
+    }
+
+    //检查应用是否具有通知权限
+    private boolean isNotificationEnabled() {
+        NotificationManagerCompat manager = NotificationManagerCompat.from(MainActivity.this);
+        return manager.areNotificationsEnabled();
+
+    }
+    AlertDialog alertDialog = null;
+    /**
+     * 弹出通知权限的提示框
+     */
+    public void showNotifyPermissionAlertDialog() {
+        if (null != alertDialog){
+            alertDialog.dismiss();
+            alertDialog = null;
+        }
+        AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+        builder.setMessage(R.string.please_allow_notify)
+                .setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        gotoAppSettingActivity(MainActivity.this);//去应用详情界面
+                    }
+                });
+        alertDialog = builder.create();
+        alertDialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
+        alertDialog.show();
+    }
+
+    /**
+     * 去应用通知权限设置界面
+     */
+    private static void gotoAppSettingActivity(Context context) {
+        Intent intent = new Intent();
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+        if (Build.VERSION.SDK_INT > 23){
+            Log.d("ServiceManger", "设备Build.VERSION.SDK_INT = " + Build.VERSION.SDK_INT +"   Build.VERSION.SDK_INT > 23的情况，去应用详情界面");
+            intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.addCategory(Intent.CATEGORY_DEFAULT);
+            intent.setData(Uri.parse("package:" + context.getPackageName()));
+            context.startActivity(intent);
+        }else if (Build.VERSION.SDK_INT >= 21 &&  Build.VERSION.SDK_INT <= 23) {
+            // API >= 21，即platform 5.0 及其以上，直接去应用的通知设置界面
+            Log.d("ServiceManger", "设备Build.VERSION.SDK_INT = " + Build.VERSION.SDK_INT +"   21 <= Build.VERSION.SDK_INT <= 23的情况，去通知设置界面");
+            Log.d("ServiceManger", "Build.VERSION_CODES >= 21的情况，设备的Build.VERSION.SDK_INT =：" + Build.VERSION.SDK_INT);
+            Log.d("ServiceManger", context.getPackageName());
+
+            intent.setAction("android.settings.APP_NOTIFICATION_SETTINGS");
+            intent.putExtra("app_package", context.getPackageName());
+            intent.putExtra("app_uid", context.getApplicationInfo().uid);
+            context.startActivity(intent);
+        } else if (Build.VERSION.SDK_INT >= 9 && Build.VERSION.SDK_INT == Build.VERSION_CODES.KITKAT) {
+            //  9<= API <= 19 的直接去应用的详情设置界面
+            Log.d("ServiceManger", "设备Build.VERSION.SDK_INT = " + Build.VERSION.SDK_INT +"   9 <= Build.VERSION.SDK_INT <= 19的情况，去应用详情界面");
+            intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.addCategory(Intent.CATEGORY_DEFAULT);
+            intent.setData(Uri.parse("package:" + context.getPackageName()));
+            context.startActivity(intent);
+        } else if (Build.VERSION.SDK_INT <= 8) {
+            //else 的去已安装应用详情界面
+            intent.setAction(Intent.ACTION_VIEW);
+            intent.setClassName("com.android.settings", "com.android.setting.InstalledAppDetails");
+            intent.putExtra("com.android.settings.ApplicationPkgName", context.getPackageName());
+        }
+        context.startActivity(intent);
     }
 
 

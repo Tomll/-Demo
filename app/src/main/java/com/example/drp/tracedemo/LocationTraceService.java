@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.graphics.BitmapFactory;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Environment;
 import android.os.IBinder;
 import android.support.annotation.Nullable;
 import android.support.v4.app.NotificationCompat;
@@ -30,6 +31,10 @@ import com.baidu.trace.model.ProcessOption;
 import com.baidu.trace.model.PushMessage;
 import com.baidu.trace.model.TransportMode;
 
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -42,6 +47,7 @@ public class LocationTraceService extends Service implements BDLocationListener,
     Trace mTrace;//轨迹服务
     LBSTraceClient mTraceClient;//轨迹服务客户端
     int transportMode;
+    String stampToDate;//本次服务启动的时间
 
     @Nullable
     @Override
@@ -51,9 +57,10 @@ public class LocationTraceService extends Service implements BDLocationListener,
         transportMode = intent.getIntExtra("transportMode", 2);
         startForeground();//开启前台服务
         startLocation();//定位服务在各种出行方式下都需要开启
-        if (transportMode == 0) {//如果是驾车方式，还需要开启鹰眼轨迹
-            startTrace(transportMode);
-        }
+//        if (transportMode == 0) {//如果是驾车方式，还需要开启鹰眼轨迹
+//            startTrace(transportMode);
+//        }
+        stampToDate = stampToDate(System.currentTimeMillis() + "");
         return new MyBinder();
     }
 
@@ -167,6 +174,9 @@ public class LocationTraceService extends Service implements BDLocationListener,
     //BDLocationListener接口回调：回调定位信息
     @Override
     public void onReceiveLocation(BDLocation bdLocation) {
+        MyLocationPoint myLocationPoint = new MyLocationPoint(bdLocation.getLatitude(), bdLocation.getLongitude(), bdLocation.getAddrStr(), bdLocation.getLocationDescribe());
+        addLocationLog(myLocationPoint.toString()+"\n");
+
         //定位点有效性判断
         locationPointValidityJudgment(bdLocation);
         //回调定位数据给监听者
@@ -206,6 +216,23 @@ public class LocationTraceService extends Service implements BDLocationListener,
         //mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newLatLng(latLng));
     }
 
+    //记录定位日志
+    public void addLocationLog(String content) {
+        try {
+            File fs = new File(Environment.getExternalStorageDirectory() + "/locLog" +stampToDate + ".txt");
+            FileOutputStream outputStream = new FileOutputStream(fs, true);
+            outputStream.write(content.getBytes());
+            outputStream.flush();
+            outputStream.close();
+            Log.e(TAG, "write log Successful");
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+    }
+
     private MyLocationDataListener myLocationDataListener;
 
     public interface MyLocationDataListener {
@@ -220,12 +247,12 @@ public class LocationTraceService extends Service implements BDLocationListener,
     /**
      * 各种运动模式下：定位点有效性判断
      */
-    public boolean locationPointValidityJudgment(BDLocation bdLocation) {
+    public void locationPointValidityJudgment(BDLocation bdLocation) {
         //当前时间戳
         long nowTime = System.currentTimeMillis();
         if (bdLocations.size() == 0) {
             bdLocations.add(bdLocation);//添加起点
-            return true;
+            return;
         }
         //当前定位点
         LatLng latLng = new LatLng(bdLocation.getLatitude(), bdLocation.getLongitude());
@@ -235,28 +262,23 @@ public class LocationTraceService extends Service implements BDLocationListener,
         long historyLatestTime = Long.valueOf(dateToStamp(bdLocations.get(bdLocations.size() - 1).getTime()));
         //两次定位 时间差（单位 s）
         long locTime = (nowTime - historyLatestTime) / 1000;
+        //以下逻辑用于对定位点进行去噪、抽稀
         //Log.d(TAG, "Distance = " + DistanceUtil.getDistance(latLng, historyLatestLatLng));
         //Toast.makeText(this, "Distance = " + DistanceUtil.getDistance(latLng, historyLatestLatLng), Toast.LENGTH_SHORT).show();
-        //以下逻辑用于对定位点进行去噪、抽稀
-        if (DistanceUtil.getDistance(latLng, historyLatestLatLng) < 3) {//两次之间小于2m,就不添加本次定位点了，降低无用点的密度
+        if (DistanceUtil.getDistance(latLng, historyLatestLatLng) < 1) {//两次定位点间距小于2m,抽稀：降低点密度
             Log.d(TAG, "静止不动，无效点，舍弃本次定位点");
-            return false;
+            return;
         }
         if (transportMode == 2 && DistanceUtil.getDistance(latLng, historyLatestLatLng) <= locTime * 3) {//步行极速 3m/s 10.8km/h
             bdLocations.add(bdLocation);
-            return true;
             //Toast.makeText(this, "步行记录", Toast.LENGTH_SHORT).show();
-        } else if (transportMode == 1 && DistanceUtil.getDistance(latLng, historyLatestLatLng) <= locTime * 8.3) {//骑行极速 8/ms  30km/h
+        } else if (transportMode == 1 && DistanceUtil.getDistance(latLng, historyLatestLatLng) <= locTime * 10) {//骑行极速 10/ms  36km/h
             bdLocations.add(bdLocation);
-            return true;
             //Toast.makeText(this, "骑行记录", Toast.LENGTH_SHORT).show();
-        }
-        /* 汽车用鹰眼轨迹了
-        else if (transportMode == 0 && DistanceUtil.getDistance(latLng, historyLatestLatLng) <= locTime * 30) {//驾车 30m/s
+        } else if (transportMode == 0 && DistanceUtil.getDistance(latLng, historyLatestLatLng) <= locTime * 36) {//驾车 36m/s  130km/h
             bdLocations.add(bdLocation);
             //Toast.makeText(this, "驾车记录", Toast.LENGTH_SHORT).show();
-        }*/
-        return false;
+        }
     }
 
 
@@ -278,7 +300,7 @@ public class LocationTraceService extends Service implements BDLocationListener,
     //将时间戳转换为日期
     public static String stampToDate(String s) {
         String res;
-        SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss");
         long lt = new Long(s);
         Date date = new Date(lt);
         res = simpleDateFormat.format(date);
@@ -355,11 +377,11 @@ public class LocationTraceService extends Service implements BDLocationListener,
         ProcessOption processOption = new ProcessOption();// 创建纠偏选项实例
         processOption.setNeedDenoise(true);// 设置需要去噪
         processOption.setNeedVacuate(true);// 设置需要抽稀
-        processOption.setNeedMapMatch(true);// 设置需要绑路
-        processOption.setRadiusThreshold(50);// 设置精度过滤值(定位精度大于50米的过滤掉)
+        processOption.setRadiusThreshold(20);// 设置精度过滤值(定位精度大于50米的过滤掉)
         switch (transportMode) {
             case 0:
                 Log.d(TAG, "查询驾车记录");
+                processOption.setNeedMapMatch(true);// 设置需要绑路
                 processOption.setTransportMode(TransportMode.driving); // 设置交通方式为 驾车
                 historyTrackRequest.setSupplementMode(SupplementMode.driving);// 设置里程填充方式为驾车
                 break;
