@@ -7,4 +7,18 @@
     <color name="colorGrey">#C3C3C3</color>
     <color name="colorGreyBlue">#7093BF</color>
     <color name="colorWineRed">#890014</color>
+
+
+    <color name="grey">#ebebeb</color>
+    <color name="black">#000000</color>
+    <color name="darkgrey">#c0c0c0</color>
+    <color name="white"> #FFFFFF</color>
+    <color name="red"> #FF0000</color>
+    <color name="darkyellow"> #FFCC33</color>
+    <color name="lightgreen">#01CF97</color>
+    <color name="middlegreen">#34B862</color>
+    <color name="deepgreen">#10A75A</color>
+    <color name="lightgrey">#DDDDDD</color>
+    <color name="wheel_timebtn_nor">#54a3fa</color>
+    <color name="wheel_timebtn_pre">#CCCCCC</color>
 </resources>
